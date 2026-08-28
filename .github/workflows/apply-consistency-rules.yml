@@ -1,0 +1,37 @@
+name: Apply prediction consistency rules
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - '.github/workflows/apply-consistency-rules.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Apply consistency rules
+        run: node scripts/apply-consistency-rules.mjs
+      - name: Commit logic update
+        run: |
+          git config user.name "sera-winner-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add index.html scripts/update-predictions.mjs
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Enforce consistent football prediction logic"
+            git pull --rebase origin main
+            git push origin main
+          fi
