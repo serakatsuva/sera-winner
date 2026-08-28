@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "status": "awaiting_openai_key",
+  "updated_at": null,
+  "model": "gpt-5.6-sol",
+  "source": "Winner fixtures via AlyBet + OpenAI web research",
+  "matches": [],
+  "note": "Add OPENAI_API_KEY as a GitHub Actions repository secret, then run the Update GoalIQ AI predictions workflow."
+}
