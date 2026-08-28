@@ -44,11 +44,13 @@ jobs:
           fi
           echo "OpenAI API key is configured."
 
-      - name: Run Winner + GPT-5.6 Sol analysis
+      - name: Run Sera Winner Luna screening + Sol Top 20 analysis
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-5.6-sol
-          MAX_MATCHES: '100'
+          SCREENING_MODEL: gpt-5.6-luna
+          DEEP_MODEL: gpt-5.6-sol
+          MAX_MATCHES: '300'
+          DEEP_MATCHES: '20'
         run: node scripts/update-predictions.mjs
 
       - name: Commit updated predictions
@@ -59,7 +61,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No prediction changes to commit."
           else
-            git commit -m "Update GoalIQ AI predictions"
+            git commit -m "Update Sera Winner AI predictions"
             git fetch origin main
             git rebase origin/main
             git push origin main
