@@ -1,0 +1,33 @@
+name: Apply today-only match display
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - '.github/workflows/apply-today-only.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Apply today-only logic
+        run: node scripts/only-todays-matches.mjs
+      - name: Commit UI update
+        run: |
+          git config user.name "sera-winner-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add index.html
+          git commit -m "Show only today's matches"
+          git pull --rebase origin main
+          git push origin main
