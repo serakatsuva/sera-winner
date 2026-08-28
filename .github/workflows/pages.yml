@@ -35,4 +35,4 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-# UI refresh: compact professional multilingual popup
+# UI refresh: compact popup + prediction consistency + 2h match expiry
