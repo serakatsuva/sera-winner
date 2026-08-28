@@ -35,4 +35,4 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-# UI refresh: always show strongest of the four probabilities + 2h match expiry
+# UI refresh: colored probability boxes + strongest core probability + 2h match expiry
