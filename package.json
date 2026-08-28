@@ -1,0 +1,15 @@
+{
+  "name": "winner-football-goaliq-live",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Winner Football GoalIQ - Winner fixture connector + probability filters",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
