@@ -3,8 +3,10 @@ import path from 'node:path';
 
 const WINNER_URL = 'https://alybet.io/api/v2/odds?bookmaker=winner';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
-const MAX_MATCHES = Math.min(100, Number(process.env.MAX_MATCHES || 100));
+const SCREENING_MODEL = process.env.SCREENING_MODEL || 'gpt-5.6-luna';
+const DEEP_MODEL = process.env.DEEP_MODEL || 'gpt-5.6-sol';
+const MAX_MATCHES = Math.min(300, Math.max(1, Number(process.env.MAX_MATCHES || 300)));
+const DEEP_MATCHES = Math.min(20, Math.max(1, Number(process.env.DEEP_MATCHES || 20)));
 
 if (!OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is missing. Add it as a GitHub Actions repository secret.');
@@ -29,7 +31,11 @@ function collectWebSources(response) {
       if (source?.url) urls.add(source.url);
     }
   }
-  return [...urls].slice(0, 40);
+  return [...urls].slice(0, 100);
+}
+
+function mergeSources(...lists) {
+  return [...new Set(lists.flat().filter(Boolean))].slice(0, 150);
 }
 
 async function callOpenAI(body) {
@@ -55,7 +61,7 @@ async function fetchWinnerMatches() {
     const res = await fetch(WINNER_URL, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'SeraWinner-AI/6.0'
+        'User-Agent': 'SeraWinner-AI/7.0'
       },
       signal: controller.signal
     });
@@ -143,7 +149,7 @@ const directSchema = {
           factors: {
             type: 'array',
             minItems: 2,
-            maxItems: 6,
+            maxItems: 5,
             items: { type: 'string' }
           }
         },
@@ -156,13 +162,13 @@ const directSchema = {
   additionalProperties: false
 };
 
-async function analyzeMatches(matches) {
-  const instructions = `You are Sera Winner, a football match analysis engine. Analyze each supplied fixture using current web research plus bookmaker data when supplied. Verify recent evidence where available: last 5-10 matches, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG, absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Do not fabricate statistics. If evidence is sparse, contradictory, outdated, or teams are ambiguous, lower data_quality and confidence. confidence is the reliability of the overall assessment, not the probability that a bet wins. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. Also return predicted_score as the single most plausible exact final score in N-N format such as 2-1, and score_confidence as the reliability of that exact-score prediction. Exact scores are difficult, so score_confidence should normally be lower than overall confidence and should not be inflated. Return one result for every supplied id.`;
+async function screenKnownMatches(matches) {
+  const instructions = `You are the high-volume screening layer of Sera Winner. Quickly assess every supplied real football fixture. Use current web research selectively and bookmaker data when supplied. Produce conservative baseline probabilities and a reliability confidence score. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. predicted_score is the single most plausible exact score, and score_confidence must be conservative. confidence is the reliability of the overall assessment, not the probability a bet wins. Do not fabricate statistics. Return one result for every supplied id. Keep summaries and factors concise because this is a screening pass; the highest-confidence matches will be researched deeply by a second model.`;
 
   const response = await callOpenAI({
-    model: OPENAI_MODEL,
-    reasoning: { effort: 'medium' },
-    tools: [{ type: 'web_search_preview', search_context_size: 'medium' }],
+    model: SCREENING_MODEL,
+    reasoning: { effort: 'low' },
+    tools: [{ type: 'web_search_preview', search_context_size: 'low' }],
     tool_choice: 'auto',
     include: ['web_search_call.action.sources'],
     store: false,
@@ -171,7 +177,7 @@ async function analyzeMatches(matches) {
     text: {
       format: {
         type: 'json_schema',
-        name: 'sera_winner_predictions',
+        name: 'sera_winner_screening',
         strict: true,
         schema: predictionSchema
       }
@@ -187,22 +193,22 @@ async function analyzeMatches(matches) {
   };
 }
 
-async function discoverAndAnalyzeWinnerMatches() {
-  const instructions = `You are Sera Winner for football analysis in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are currently/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, you may use authoritative current football schedules as a fallback, but source_note must explicitly say that the Winner listing was not directly verified. In that fallback case cap data_quality at 60, confidence at 65, and score_confidence at 45. Never invent Winner odds. For each valid fixture, research recent form and goal patterns and estimate p2, p3, p1h and p2h. Also provide predicted_score as the single most plausible exact final score in N-N format and score_confidence for that exact score. Exact score confidence must be conservative and should normally be lower than overall confidence. confidence is reliability of the assessment, not chance of winning. Return kickoff_iso as ISO-8601 when known, otherwise an empty string. Keep summaries concise and evidence-based.`;
+async function discoverAndScreenWinnerMatches() {
+  const instructions = `You are the high-volume screening layer of Sera Winner in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are current/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, use authoritative current football schedules as fallback and say so in source_note. In that fallback case cap data_quality at 60, confidence at 65, and score_confidence at 45. Never invent Winner odds. Do a fast screening estimate for p2, p3, p1h, p2h, predicted_score, score_confidence and overall confidence. Do not spend deep research on every match; the 20 highest-confidence fixtures will be researched by GPT-5.6 Sol afterward. Keep summaries concise. Return kickoff_iso when known.`;
 
   const response = await callOpenAI({
-    model: OPENAI_MODEL,
-    reasoning: { effort: 'medium' },
-    tools: [{ type: 'web_search_preview', search_context_size: 'medium' }],
+    model: SCREENING_MODEL,
+    reasoning: { effort: 'low' },
+    tools: [{ type: 'web_search_preview', search_context_size: 'low' }],
     tool_choice: 'auto',
     include: ['web_search_call.action.sources'],
     store: false,
     instructions,
-    input: `Current time: ${new Date().toISOString()}. Find and analyze Winner Football fixtures now.`,
+    input: `Current time: ${new Date().toISOString()}. Find and screen current Winner football fixtures.`,
     text: {
       format: {
         type: 'json_schema',
-        name: 'sera_winner_direct_predictions',
+        name: 'sera_winner_direct_screening',
         strict: true,
         schema: directSchema
       }
@@ -214,7 +220,7 @@ async function discoverAndAnalyzeWinnerMatches() {
     const ms = m.kickoff_iso ? Date.parse(m.kickoff_iso) : NaN;
     return {
       ...m,
-      id: String(m.id || `web-${i+1}`),
+      id: String(m.id || `web-${i + 1}`),
       start_time: Number.isFinite(ms) ? Math.floor(ms / 1000) : null,
       odds: {},
       source: m.source_note?.includes('not directly verified')
@@ -231,26 +237,68 @@ async function discoverAndAnalyzeWinnerMatches() {
   };
 }
 
+async function deeplyAnalyzeMatches(matches) {
+  const instructions = `You are the deep-analysis layer of Sera Winner. These fixtures were selected because they had the highest overall confidence in a first-pass screening. Deeply research EACH supplied fixture using current web sources. Check recent 5-10 match form, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG where available, injuries/absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Recalculate p2, p3, p1h, p2h, predicted_score, score_confidence, confidence and data_quality from the stronger evidence. Do not preserve a high screening confidence if deeper evidence does not justify it. Never fabricate statistics. confidence is reliability of the overall assessment, not chance of a winning bet. Return one result for every supplied id.`;
+
+  const response = await callOpenAI({
+    model: DEEP_MODEL,
+    reasoning: { effort: 'medium' },
+    tools: [{ type: 'web_search_preview', search_context_size: 'medium' }],
+    tool_choice: 'auto',
+    include: ['web_search_call.action.sources'],
+    store: false,
+    instructions,
+    input: JSON.stringify({ generated_at: new Date().toISOString(), selected_by: 'highest screening confidence', fixtures: matches }),
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'sera_winner_deep_top20',
+        strict: true,
+        schema: predictionSchema
+      }
+    }
+  });
+
+  const parsed = JSON.parse(extractOutputText(response));
+  return {
+    results: parsed.matches || [],
+    sources: collectWebSources(response),
+    response_id: response.id || null,
+    usage: response.usage || null
+  };
+}
+
+function selectTopByConfidence(matches, count) {
+  return [...matches]
+    .filter(m => Number.isFinite(Number(m.confidence)))
+    .sort((a, b) => Number(b.confidence) - Number(a.confidence))
+    .slice(0, Math.min(count, matches.length));
+}
+
 async function main() {
   const outputPath = path.join(process.cwd(), 'data', 'predictions.json');
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
   let matches = [];
   let sourceMode = 'AlyBet → Winner';
-  let ai;
+  let screening;
 
   try {
     matches = await fetchWinnerMatches();
     if (!matches.length) throw new Error('Winner connector returned zero matches');
-    ai = await analyzeMatches(matches);
-    const byId = new Map(ai.results.map(r => [String(r.id), r]));
-    matches = matches.map(match => ({ ...match, ...(byId.get(String(match.id)) || {}) }));
+    screening = await screenKnownMatches(matches);
+    const byId = new Map(screening.results.map(r => [String(r.id), r]));
+    matches = matches.map(match => ({
+      ...match,
+      ...(byId.get(String(match.id)) || {}),
+      analysis_tier: 'luna_screening'
+    }));
   } catch (connectorError) {
     console.warn(`Primary Winner connector unavailable: ${connectorError.message}`);
-    console.log('Falling back to GPT-5.6 Sol web discovery + analysis.');
-    const direct = await discoverAndAnalyzeWinnerMatches();
-    matches = direct.matches;
-    ai = direct;
+    console.log(`Falling back to ${SCREENING_MODEL} web discovery + screening.`);
+    const direct = await discoverAndScreenWinnerMatches();
+    matches = direct.matches.map(m => ({ ...m, analysis_tier: 'luna_screening' }));
+    screening = direct;
     sourceMode = 'OpenAI web discovery for Winner fixtures';
   }
 
@@ -259,10 +307,12 @@ async function main() {
       ok: false,
       status: 'no_winner_matches',
       updated_at: new Date().toISOString(),
-      model: OPENAI_MODEL,
+      model: `${SCREENING_MODEL} + ${DEEP_MODEL}`,
+      screening_model: SCREENING_MODEL,
+      deep_model: DEEP_MODEL,
       source: sourceMode,
       matches: [],
-      web_sources: ai?.sources || [],
+      web_sources: screening?.sources || [],
       note: 'No verifiable current Winner football fixtures were found during this update.'
     };
     await fs.writeFile(outputPath, JSON.stringify(payload, null, 2));
@@ -270,21 +320,57 @@ async function main() {
     return;
   }
 
+  const topForDeep = selectTopByConfidence(matches, DEEP_MATCHES);
+  const screeningConfidence = new Map(topForDeep.map((m, i) => [String(m.id), { confidence: Number(m.confidence), rank: i + 1 }]));
+
+  let deep = { results: [], sources: [], response_id: null, usage: null };
+  if (topForDeep.length) {
+    console.log(`Deep-analyzing top ${topForDeep.length} matches with ${DEEP_MODEL}, selected strictly by screening confidence.`);
+    deep = await deeplyAnalyzeMatches(topForDeep);
+    const deepById = new Map(deep.results.map(r => [String(r.id), r]));
+
+    matches = matches.map(match => {
+      const selected = screeningConfidence.get(String(match.id));
+      const result = deepById.get(String(match.id));
+      if (!selected) return match;
+      return {
+        ...match,
+        ...(result || {}),
+        analysis_tier: 'sol_deep',
+        deep_rank: selected.rank,
+        screening_confidence: selected.confidence,
+        deep_selected_by: 'confidence'
+      };
+    });
+  }
+
   const payload = {
     ok: true,
     status: 'ai_analyzed',
     updated_at: new Date().toISOString(),
-    model: OPENAI_MODEL,
+    model: `${SCREENING_MODEL} + ${DEEP_MODEL}`,
+    screening_model: SCREENING_MODEL,
+    deep_model: DEEP_MODEL,
+    max_matches: MAX_MATCHES,
+    deep_matches_target: DEEP_MATCHES,
+    deep_matches_count: topForDeep.length,
+    deep_selection: 'Top 20 by screening confidence',
     source: sourceMode,
     matches_count: matches.length,
     matches,
-    web_sources: ai?.sources || [],
-    openai_response_id: ai?.response_id || null,
-    usage: ai?.usage || null
+    web_sources: mergeSources(screening?.sources || [], deep?.sources || []),
+    openai_response_ids: {
+      screening: screening?.response_id || null,
+      deep: deep?.response_id || null
+    },
+    usage: {
+      screening: screening?.usage || null,
+      deep: deep?.usage || null
+    }
   };
 
   await fs.writeFile(outputPath, JSON.stringify(payload, null, 2));
-  console.log(`Wrote ${matches.length} AI-analyzed fixtures to ${outputPath}`);
+  console.log(`Wrote ${matches.length} fixtures; ${topForDeep.length} received deep ${DEEP_MODEL} analysis.`);
 }
 
 main().catch(async err => {
@@ -296,7 +382,9 @@ main().catch(async err => {
       ok: false,
       status: 'analysis_error',
       updated_at: new Date().toISOString(),
-      model: OPENAI_MODEL,
+      model: `${SCREENING_MODEL} + ${DEEP_MODEL}`,
+      screening_model: SCREENING_MODEL,
+      deep_model: DEEP_MODEL,
       matches: [],
       note: String(err.message || err)
     }, null, 2));
