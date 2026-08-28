@@ -163,7 +163,7 @@ const directSchema = {
 };
 
 async function screenKnownMatches(matches) {
-  const instructions = `You are the high-volume screening layer of Sera Winner. Quickly assess every supplied real football fixture. Use current web research selectively and bookmaker data when supplied. Produce conservative baseline probabilities and a reliability confidence score. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. predicted_score is the single most plausible exact score, and score_confidence must be conservative. confidence is the reliability of the overall assessment, not the probability a bet wins. Do not fabricate statistics. Return one result for every supplied id. Keep summaries and factors concise because this is a screening pass; the highest-confidence matches will be researched deeply by a second model.`;
+  const instructions = `You are the high-volume screening layer of Sera Winner. Quickly assess every supplied real football fixture. Use current web research selectively and bookmaker data when supplied. Produce conservative baseline probabilities and a reliability confidence score. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. predicted_score is the single most plausible exact score, and score_confidence must be conservative. Enforce mathematical and semantic consistency: p3 must never exceed p2; if the predicted score totals fewer than 2 goals, do not simultaneously make 2+ goals a strong (>60%) proposition unless the exact-score confidence is explicitly low; if it totals fewer than 3 goals, do not make 3+ goals a strong (>60%) proposition unless exact-score confidence is explicitly low. confidence is the reliability of the overall assessment, not the probability a bet wins. Do not fabricate statistics. Return one result for every supplied id. Keep summaries and factors concise because this is a screening pass; the highest-confidence matches will be researched deeply by a second model.`;
 
   const response = await callOpenAI({
     model: SCREENING_MODEL,
@@ -194,7 +194,7 @@ async function screenKnownMatches(matches) {
 }
 
 async function discoverAndScreenWinnerMatches() {
-  const instructions = `You are the high-volume screening layer of Sera Winner in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are current/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, use authoritative current football schedules as fallback and say so in source_note. In that fallback case cap data_quality at 60, confidence at 65, and score_confidence at 45. Never invent Winner odds. Do a fast screening estimate for p2, p3, p1h, p2h, predicted_score, score_confidence and overall confidence. Do not spend deep research on every match; the 20 highest-confidence fixtures will be researched by GPT-5.6 Sol afterward. Keep summaries concise. Return kickoff_iso when known.`;
+  const instructions = `You are the high-volume screening layer of Sera Winner in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are current/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, use authoritative current football schedules as fallback and say so in source_note. In that fallback case cap data_quality at 60, confidence at 65, and score_confidence at 45. Never invent Winner odds. Do a fast screening estimate for p2, p3, p1h, p2h, predicted_score, score_confidence and overall confidence. Enforce consistency: p3 <= p2; a low-scoring predicted score must not coexist with a strong goals-over probability unless the exact-score confidence is reduced accordingly. Do not spend deep research on every match; the 20 highest-confidence fixtures will be researched by GPT-5.6 Sol afterward. Keep summaries concise. Return kickoff_iso when known.`;
 
   const response = await callOpenAI({
     model: SCREENING_MODEL,
@@ -238,7 +238,7 @@ async function discoverAndScreenWinnerMatches() {
 }
 
 async function deeplyAnalyzeMatches(matches) {
-  const instructions = `You are the deep-analysis layer of Sera Winner. These fixtures were selected because they had the highest overall confidence in a first-pass screening. Deeply research EACH supplied fixture using current web sources. Check recent 5-10 match form, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG where available, injuries/absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Recalculate p2, p3, p1h, p2h, predicted_score, score_confidence, confidence and data_quality from the stronger evidence. Do not preserve a high screening confidence if deeper evidence does not justify it. Never fabricate statistics. confidence is reliability of the overall assessment, not chance of a winning bet. Return one result for every supplied id.`;
+  const instructions = `You are the deep-analysis layer of Sera Winner. These fixtures were selected because they had the highest overall confidence in a first-pass screening. Deeply research EACH supplied fixture using current web sources. Check recent 5-10 match form, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG where available, injuries/absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Recalculate p2, p3, p1h, p2h, predicted_score, score_confidence, confidence and data_quality from the stronger evidence. Do not preserve a high screening confidence if deeper evidence does not justify it. Enforce consistency between the exact score and goal probabilities: p3 <= p2; if predicted_score totals 0-1 goals and p2 is above 60, lower score_confidence substantially unless evidence strongly supports a broad outcome distribution; if predicted_score totals fewer than 3 goals and p3 is above 60, likewise lower score_confidence. Never fabricate statistics. confidence is reliability of the overall assessment, not chance of a winning bet. Return one result for every supplied id.`;
 
   const response = await callOpenAI({
     model: DEEP_MODEL,
@@ -267,6 +267,9 @@ async function deeplyAnalyzeMatches(matches) {
     usage: response.usage || null
   };
 }
+
+function parseScoreTotal(score){const m=String(score||'').match(/(\d+)\s*[-:]\s*(\d+)/);return m?Number(m[1])+Number(m[2]):null}
+function enforceConsistency(m){const out={...m};const p2=Number(out.p2),p3=Number(out.p3);if(Number.isFinite(p2)&&Number.isFinite(p3)&&p3>p2)out.p3=Math.max(0,Math.min(100,Math.round(p2)));const total=parseScoreTotal(out.predicted_score);if(total!=null){let sc=Number(out.score_confidence);if(Number.isFinite(sc)){if(total<2&&Number(out.p2)>=60)sc=Math.min(sc,35);if(total<3&&Number(out.p3)>=60)sc=Math.min(sc,35);if(total>=2&&Number(out.p2)<45)sc=Math.min(sc,35);if(total>=3&&Number(out.p3)<45)sc=Math.min(sc,35);out.score_confidence=Math.max(0,Math.min(100,Math.round(sc)))}}return out}
 
 function selectTopByConfidence(matches, count) {
   return [...matches]
@@ -320,6 +323,8 @@ async function main() {
     return;
   }
 
+  matches = matches.map(enforceConsistency);
+
   const topForDeep = selectTopByConfidence(matches, DEEP_MATCHES);
   const screeningConfidence = new Map(topForDeep.map((m, i) => [String(m.id), { confidence: Number(m.confidence), rank: i + 1 }]));
 
@@ -343,6 +348,8 @@ async function main() {
       };
     });
   }
+
+  matches = matches.map(enforceConsistency);
 
   const payload = {
     ok: true,
