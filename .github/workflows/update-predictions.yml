@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   analyze:
+    environment:
+      name: github-pages
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,7 +37,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
-            echo "OPENAI_API_KEY is not configured."
+            echo "OPENAI_API_KEY is not configured in repository secrets or github-pages environment secrets."
             exit 1
           fi
           echo "OpenAI API key is configured."
