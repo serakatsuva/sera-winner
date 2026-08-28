@@ -2,16 +2,13 @@ name: Update GoalIQ AI predictions
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
-    paths:
-      - '.github/workflows/update-predictions.yml'
-      - 'scripts/update-predictions.mjs'
   schedule:
     - cron: '0 6 * * *'
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: goaliq-predictions
@@ -62,3 +59,27 @@ jobs:
             git rebase origin/main
             git push origin main
           fi
+
+  deploy:
+    needs: analyze
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload static site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
