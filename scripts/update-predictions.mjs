@@ -4,7 +4,7 @@ import path from 'node:path';
 const WINNER_URL = 'https://alybet.io/api/v2/odds?bookmaker=winner';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
-const MAX_MATCHES = Math.min(20, Number(process.env.MAX_MATCHES || 20));
+const MAX_MATCHES = Math.min(100, Number(process.env.MAX_MATCHES || 100));
 
 if (!OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is missing. Add it as a GitHub Actions repository secret.');
