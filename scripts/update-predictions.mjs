@@ -55,7 +55,7 @@ async function fetchWinnerMatches() {
     const res = await fetch(WINNER_URL, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'WinnerFootball-GoalIQ-AI/5.0'
+        'User-Agent': 'SeraWinner-AI/6.0'
       },
       signal: controller.signal
     });
@@ -96,6 +96,8 @@ const predictionSchema = {
           p3: { type: 'integer', minimum: 0, maximum: 100 },
           p1h: { type: 'integer', minimum: 0, maximum: 100 },
           p2h: { type: 'integer', minimum: 0, maximum: 100 },
+          predicted_score: { type: 'string' },
+          score_confidence: { type: 'integer', minimum: 0, maximum: 100 },
           confidence: { type: 'integer', minimum: 0, maximum: 100 },
           data_quality: { type: 'integer', minimum: 0, maximum: 100 },
           summary: { type: 'string' },
@@ -106,7 +108,7 @@ const predictionSchema = {
             items: { type: 'string' }
           }
         },
-        required: ['id','p2','p3','p1h','p2h','confidence','data_quality','summary','factors'],
+        required: ['id','p2','p3','p1h','p2h','predicted_score','score_confidence','confidence','data_quality','summary','factors'],
         additionalProperties: false
       }
     }
@@ -132,6 +134,8 @@ const directSchema = {
           p3: { type: 'integer', minimum: 0, maximum: 100 },
           p1h: { type: 'integer', minimum: 0, maximum: 100 },
           p2h: { type: 'integer', minimum: 0, maximum: 100 },
+          predicted_score: { type: 'string' },
+          score_confidence: { type: 'integer', minimum: 0, maximum: 100 },
           confidence: { type: 'integer', minimum: 0, maximum: 100 },
           data_quality: { type: 'integer', minimum: 0, maximum: 100 },
           summary: { type: 'string' },
@@ -143,7 +147,7 @@ const directSchema = {
             items: { type: 'string' }
           }
         },
-        required: ['id','league','home','away','kickoff_iso','p2','p3','p1h','p2h','confidence','data_quality','summary','source_note','factors'],
+        required: ['id','league','home','away','kickoff_iso','p2','p3','p1h','p2h','predicted_score','score_confidence','confidence','data_quality','summary','source_note','factors'],
         additionalProperties: false
       }
     }
@@ -153,7 +157,7 @@ const directSchema = {
 };
 
 async function analyzeMatches(matches) {
-  const instructions = `You are GoalIQ, a football match analysis engine. Analyze each supplied fixture using current web research plus bookmaker data when supplied. Verify recent evidence where available: last 5-10 matches, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG, absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Do not fabricate statistics. If evidence is sparse, contradictory, outdated, or teams are ambiguous, lower data_quality and confidence. confidence is the reliability of the overall GoalIQ assessment, not the probability that a bet wins. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. Return one result for every supplied id.`;
+  const instructions = `You are Sera Winner, a football match analysis engine. Analyze each supplied fixture using current web research plus bookmaker data when supplied. Verify recent evidence where available: last 5-10 matches, goals scored/conceded, home/away form, first-half vs second-half scoring patterns, relevant H2H, credible xG, absences/team news, schedule congestion, competition context, and market odds only as a secondary signal. Do not fabricate statistics. If evidence is sparse, contradictory, outdated, or teams are ambiguous, lower data_quality and confidence. confidence is the reliability of the overall assessment, not the probability that a bet wins. p2 = probability of at least 2 total goals; p3 = probability of at least 3 total goals; p1h = probability first half has more goals than second half; p2h = probability second half has more goals than first half. Also return predicted_score as the single most plausible exact final score in N-N format such as 2-1, and score_confidence as the reliability of that exact-score prediction. Exact scores are difficult, so score_confidence should normally be lower than overall confidence and should not be inflated. Return one result for every supplied id.`;
 
   const response = await callOpenAI({
     model: OPENAI_MODEL,
@@ -167,7 +171,7 @@ async function analyzeMatches(matches) {
     text: {
       format: {
         type: 'json_schema',
-        name: 'goaliq_predictions',
+        name: 'sera_winner_predictions',
         strict: true,
         schema: predictionSchema
       }
@@ -184,7 +188,7 @@ async function analyzeMatches(matches) {
 }
 
 async function discoverAndAnalyzeWinnerMatches() {
-  const instructions = `You are GoalIQ for Winner Football in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are currently/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, you may use authoritative current football schedules as a fallback, but source_note must explicitly say that the Winner listing was not directly verified, and in that fallback case cap data_quality at 60 and confidence at 65. Never invent Winner odds. For each valid fixture, research recent form and goal patterns and estimate p2, p3, p1h and p2h. confidence is reliability of the assessment, not chance of winning. Return kickoff_iso as ISO-8601 when known, otherwise an empty string. Keep summaries concise and evidence-based.`;
+  const instructions = `You are Sera Winner for football analysis in the DRC. Use current web search to identify up to ${MAX_MATCHES} REAL football fixtures that are currently/upcoming within roughly the next 24 hours and are offered by or relevant to Winner.bet. Prefer direct Winner.bet evidence. Exclude virtual football, Winner Leagues, simulated reality, eSoccer, already-finished fixtures, and ambiguous teams. If Winner.bet's live fixture list cannot be directly verified, you may use authoritative current football schedules as a fallback, but source_note must explicitly say that the Winner listing was not directly verified. In that fallback case cap data_quality at 60, confidence at 65, and score_confidence at 45. Never invent Winner odds. For each valid fixture, research recent form and goal patterns and estimate p2, p3, p1h and p2h. Also provide predicted_score as the single most plausible exact final score in N-N format and score_confidence for that exact score. Exact score confidence must be conservative and should normally be lower than overall confidence. confidence is reliability of the assessment, not chance of winning. Return kickoff_iso as ISO-8601 when known, otherwise an empty string. Keep summaries concise and evidence-based.`;
 
   const response = await callOpenAI({
     model: OPENAI_MODEL,
@@ -198,7 +202,7 @@ async function discoverAndAnalyzeWinnerMatches() {
     text: {
       format: {
         type: 'json_schema',
-        name: 'goaliq_direct_winner_predictions',
+        name: 'sera_winner_direct_predictions',
         strict: true,
         schema: directSchema
       }
