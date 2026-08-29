@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "status": "setup_required",
+  "updated_at": null,
+  "model": "gpt-5.6-luna + gpt-5.6-sol",
+  "markets_count": 0,
+  "markets": [],
+  "note": "Le workflow GitHub doit réussir une première fois avant d'afficher des résultats IA."
+}
