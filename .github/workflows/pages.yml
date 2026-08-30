@@ -35,4 +35,4 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-# UI refresh: colored probability boxes + strongest core probability + 2h match expiry
+# UI refresh: results comparison menu + verified match outcomes
