@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/apply-results-menu.yml'
       - 'scripts/patch-results-menu.mjs'
+      - 'scripts/fix-results-menu-patcher.mjs'
   workflow_dispatch:
 
 permissions:
@@ -21,6 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - run: node scripts/fix-results-menu-patcher.mjs
       - run: node scripts/patch-results-menu.mjs
       - run: |
           git config user.name "sera-winner-bot"
