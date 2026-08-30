@@ -8,7 +8,7 @@ on:
       - '.github/workflows/update-results.yml'
       - 'scripts/update-results.mjs'
   schedule:
-    - cron: '15 2,13,17,21,23 * * *'
+    - cron: '15 */2 * * *'
 
 permissions:
   contents: write
