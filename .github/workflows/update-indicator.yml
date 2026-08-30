@@ -1,4 +1,4 @@
-name: Sera Indicator — Deriv H1 H4 + OpenAI
+name: Sera Indicator — Weltrade H1 H4 + OpenAI
 
 on:
   workflow_dispatch:
@@ -8,8 +8,10 @@ on:
       - '.github/workflows/update-indicator.yml'
       - 'indicator/index.html'
       - 'indicator/styles.css'
+      - 'indicator/weltrade.css'
       - 'indicator/app.js'
       - 'indicator/scripts/update-signals.mjs'
+      - 'indicator/data/weltrade-candles.json'
   schedule:
     - cron: '5 * * * *'
 
@@ -19,7 +21,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: sera-indicator-signals
+  group: sera-indicator-weltrade-signals
   cancel-in-progress: true
 
 jobs:
@@ -37,27 +39,17 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Check OpenAI secret
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "OPENAI_API_KEY is not configured as a Repository secret."
-            exit 1
-          fi
-          echo "OpenAI API key is configured."
-
-      - name: Test technical engine
+      - name: Test signal engine
         run: node indicator/scripts/update-signals.mjs --self-test
 
-      - name: Analyze Deriv H1 H4 with Luna and Sol
+      - name: Analyze fresh Weltrade MT5 candles
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCREENING_MODEL: gpt-5.6-luna
           DEEP_MODEL: gpt-5.6-sol
         run: node indicator/scripts/update-signals.mjs
 
-      - name: Commit validated signals
+      - name: Commit signal status
         run: |
           git config user.name "sera-indicator-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -65,7 +57,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No signal changes to commit."
           else
-            git commit -m "Update Sera Indicator AI signals"
+            git commit -m "Update Sera Indicator Weltrade signals"
             git fetch origin main
             git rebase origin/main
             git push origin main

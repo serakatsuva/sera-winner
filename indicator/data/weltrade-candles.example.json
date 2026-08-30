@@ -1,0 +1,20 @@
+{
+  "broker": "Weltrade",
+  "account_type": "SyntX",
+  "exported_at": "2026-08-30T12:00:00Z",
+  "markets": [
+    {
+      "market": "FX Vol",
+      "symbol": "REPLACE_WITH_EXACT_MT5_SYMBOL",
+      "h1": [],
+      "h4": []
+    }
+  ],
+  "candle_format": {
+    "open": 0,
+    "high": 0,
+    "low": 0,
+    "close": 0,
+    "epoch": 0
+  }
+}
