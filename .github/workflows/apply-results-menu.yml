@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/apply-results-menu.yml'
       - 'scripts/patch-results-menu-v3.mjs'
+      - 'scripts/patch-results-summary-v4.mjs'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,7 @@ jobs:
         with:
           node-version: '24'
       - run: node scripts/patch-results-menu-v3.mjs
+      - run: node scripts/patch-results-summary-v4.mjs
       - run: |
           git config user.name "sera-winner-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -29,7 +31,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Results menu already applied."
           else
-            git commit -m "Add Sera Winner results comparison menu"
+            git commit -m "Improve automatic results performance dashboard"
             git fetch origin main
             git rebase origin/main
             git push origin main
