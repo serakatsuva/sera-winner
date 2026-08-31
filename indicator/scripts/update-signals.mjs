@@ -4,8 +4,21 @@ import path from 'node:path';
 const OPENAI_API_KEY=process.env.OPENAI_API_KEY||'';
 const SCREENING_MODEL=process.env.SCREENING_MODEL||'gpt-5.6-luna';
 const DEEP_MODEL=process.env.DEEP_MODEL||'gpt-5.6-sol';
-const INPUT=path.join(process.cwd(),'indicator','data','weltrade-candles.json');
 const OUTPUT=path.join(process.cwd(),'indicator','data','signals.json');
+const DERIV_WS='wss://api.derivws.com/trading/v1/options/ws/public';
+const MARKETS=[
+  {market:'Boom 300 Index',symbol:'BOOM300N'},
+  {market:'Boom 500 Index',symbol:'BOOM500'},
+  {market:'Boom 1000 Index',symbol:'BOOM1000'},
+  {market:'Crash 300 Index',symbol:'CRASH300N'},
+  {market:'Crash 500 Index',symbol:'CRASH500'},
+  {market:'Crash 1000 Index',symbol:'CRASH1000'},
+  {market:'Volatility 10 Index',symbol:'R_10'},
+  {market:'Volatility 25 Index',symbol:'R_25'},
+  {market:'Volatility 50 Index',symbol:'R_50'},
+  {market:'Volatility 75 Index',symbol:'R_75'},
+  {market:'Volatility 100 Index',symbol:'R_100'}
+];
 
 function inspectCandles(candles){
   if(!Array.isArray(candles)||candles.length<60)return null;
@@ -32,7 +45,8 @@ function inspectCandles(candles){
 
 function technicalSetup(meta,h1,h4){
   const aligned=h1.side===h4.side;
-  const confirmed=aligned&&h4.trendStrong&&h1.passed>=5&&!h1.spikeRisk;
+  const guard=meta.market.startsWith('Boom')?h1.side!=='SELL'||h1.sweep:meta.market.startsWith('Crash')?h1.side!=='BUY'||h1.sweep:true;
+  const confirmed=aligned&&h4.trendStrong&&h1.passed>=5&&!h1.spikeRisk&&guard;
   const verdict=confirmed?h1.side:'ATTENDRE';
   const confidence=confirmed?Math.round(h1.confidence*.58+h4.confidence*.42):Math.min(64,Math.round((h1.confidence+h4.confidence)/2));
   let levels=null;
@@ -40,30 +54,43 @@ function technicalSetup(meta,h1,h4){
     const entry=h1.price,structural=verdict==='BUY'?Math.min(entry-h1.atr*1.5,h1.swingLow):Math.max(entry+h1.atr*1.5,h1.swingHigh),distance=Math.max(Math.abs(entry-structural),h1.atr),direction=verdict==='BUY'?1:-1;
     levels={entry,sl:structural,tp1:entry+direction*distance*1.5,tp2:entry+direction*distance*2.4,tp3:entry+direction*distance*3.6};
   }
-  return {...meta,price:h1.price,technical_verdict:verdict,technical_confidence:confidence,levels,h1,h4,risk:{risk_reward:3.6,spike_risk:h1.spikeRisk,source:'Weltrade MT5 SyntX'}};
+  return {...meta,price:h1.price,technical_verdict:verdict,technical_confidence:confidence,levels,h1,h4,risk:{risk_reward:3.6,spike_risk:h1.spikeRisk,boom_crash_guard:guard,source:'Deriv public WebSocket'}};
 }
 
-async function loadWeltradeFeed(){
-  try{
-    const feed=JSON.parse(await fs.readFile(INPUT,'utf8'));
-    if(feed?.broker!=='Weltrade'||!Array.isArray(feed?.markets))return {ready:false,status:'invalid_mt5_feed',note:'Le fichier MT5 ne correspond pas à un export Weltrade valide.'};
-    const exportedAt=Date.parse(feed.exported_at);
-    if(!Number.isFinite(exportedAt))return {ready:false,status:'invalid_mt5_time',note:'L’export Weltrade doit contenir une date exported_at valide.'};
-    if(Date.now()-exportedAt>130*60*1000)return {ready:false,status:'stale_mt5_data',note:'ATTENDRE — les bougies Weltrade MT5 ont plus de 130 minutes. Une nouvelle exportation H1/H4 est requise.'};
-    const valid=feed.markets.filter(row=>row?.market&&row?.symbol&&Array.isArray(row?.h1)&&row.h1.length>=60&&Array.isArray(row?.h4)&&row.h4.length>=60);
-    if(!valid.length)return {ready:false,status:'insufficient_mt5_data',note:'ATTENDRE — aucune série Weltrade ne contient au moins 60 bougies H1 et 60 bougies H4.'};
-    return {ready:true,feed:{...feed,markets:valid}};
-  }catch(error){
-    if(error?.code==='ENOENT')return {ready:false,status:'awaiting_mt5',note:'ATTENDRE — les bougies Weltrade MT5 H1/H4 ne sont pas encore reçues. Aucun cours ni signal n’est inventé.'};
-    return {ready:false,status:'invalid_mt5_json',note:'Le fichier de bougies Weltrade est illisible.'};
-  }
-}
-
-async function writeWaiting(status,note){
-  const payload={ok:false,status,source_broker:'Weltrade',source:'Weltrade MT5 · SyntX',updated_at:null,markets_count:0,confirmed_signals:0,markets:[],note,safety:'Signaux uniquement. Aucun accès au compte et aucun ordre automatique.'};
-  await fs.mkdir(path.dirname(OUTPUT),{recursive:true});
-  await fs.writeFile(OUTPUT,JSON.stringify(payload,null,2));
-  console.log(note);
+async function fetchAllCandles(){
+  return new Promise((resolve,reject)=>{
+    const ws=new WebSocket(DERIV_WS),requests=new Map(),received=new Map();
+    let settled=false,reqId=100;
+    const finish=error=>{
+      if(settled)return;
+      settled=true;
+      clearTimeout(timer);
+      try{ws.close();}catch{}
+      if(error)reject(error);else resolve(received);
+    };
+    const timer=setTimeout(()=>finish(new Error(`Deriv timeout: ${received.size}/${MARKETS.length*2} candle sets`)),45000);
+    ws.addEventListener('open',()=>{
+      for(const market of MARKETS){
+        for(const [timeframe,granularity] of [['H1',3600],['H4',14400]]){
+          reqId+=1;
+          requests.set(reqId,{...market,timeframe});
+          ws.send(JSON.stringify({ticks_history:market.symbol,style:'candles',granularity,count:240,end:'latest',adjust_start_time:1,req_id:reqId}));
+        }
+      }
+    });
+    ws.addEventListener('message',event=>{
+      let message;
+      try{message=JSON.parse(String(event.data));}catch{return;}
+      if(message.error||message.errors)return finish(new Error(`Deriv rejected a candle request: ${message.error?.message||message.errors?.[0]?.message||'unknown error'}`));
+      if(!message.candles)return;
+      const key=Number(message.req_id??message.echo_req?.req_id),request=requests.get(key);
+      if(!request)return;
+      const candles=message.candles.map(c=>({open:+c.open,high:+c.high,low:+c.low,close:+c.close,epoch:+c.epoch}));
+      received.set(`${request.symbol}:${request.timeframe}`,candles);
+      if(received.size===MARKETS.length*2)finish();
+    });
+    ws.addEventListener('error',()=>finish(new Error('Deriv WebSocket connection failed')));
+  });
 }
 
 const auditItem={type:'object',additionalProperties:false,properties:{id:{type:'string'},verdict:{type:'string',enum:['BUY','SELL','ATTENDRE']},confidence:{type:'number',minimum:0,maximum:100},summary:{type:'string'},confirmations:{type:'array',items:{type:'string'}},contradictions:{type:'array',items:{type:'string'}},risk:{type:'string'},needs_expert_review:{type:'boolean'}},required:['id','verdict','confidence','summary','confirmations','contradictions','risk','needs_expert_review']};
@@ -73,27 +100,26 @@ function extractOutputText(response){if(response?.output_text)return response.ou
 async function callOpenAI(body){const res=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(body)});const raw=await res.text();let response={};try{response=raw?JSON.parse(raw):{};}catch{throw new Error(`OpenAI returned unreadable JSON (${res.status})`);}if(!res.ok)throw new Error(`OpenAI API ${res.status}: ${response?.error?.code||response?.error?.type||'request_failed'}`);if(response.status==='incomplete')throw new Error(`OpenAI incomplete response: ${response.incomplete_details?.reason||'unknown'}`);return response;}
 function publicSetup(setup){const clean=value=>({side:value.side,confidence:value.confidence,passed:value.passed,bos:value.bos,choch:value.choch,sweep:value.sweep,impulse:value.impulse,fvg:value.fvg,retest:value.retest,orderBlock:value.orderBlock,momentum:value.momentum,trendStrong:value.trendStrong,spikeRisk:value.spikeRisk,ema20:value.ema20,ema50:value.ema50,ema200:value.ema200,rsi:value.rsi,atr:value.atr,swingHigh:value.swingHigh,swingLow:value.swingLow,closedAt:value.closedAt,price:value.price,change:value.change});return {id:setup.symbol,market:setup.market,symbol:setup.symbol,price:setup.price,technical_verdict:setup.technical_verdict,technical_confidence:setup.technical_confidence,levels:setup.levels,h1:clean(setup.h1),h4:clean(setup.h4),risk:setup.risk};}
 async function auditMarkets(model,setups,deep=false){
-  const instructions=deep?'Tu es Sol, seconde couche de contrôle de Sera Indicator pour les indices Weltrade SyntX. Vérifie profondément chaque setup sans inventer de données. Confirme uniquement le même BUY/SELL technique ou remplace-le par ATTENDRE. Examine H1/H4, structure, liquidité, retest, momentum, ATR, risque de spike et cohérence entrée/SL/TP.':'Tu es Luna, première couche de contrôle indépendante de Sera Indicator pour Weltrade SyntX. Analyse uniquement les indicateurs fournis. Confirme le même BUY/SELL technique ou remplace-le par ATTENDRE; ne transforme jamais ATTENDRE en signal et n’inverse jamais le sens. La confiance n’est jamais une garantie de gain.';
-  const response=await callOpenAI({model,reasoning:{effort:deep?'medium':'low'},store:false,instructions,input:JSON.stringify({broker:'Weltrade',market_family:'SyntX',generated_at:new Date().toISOString(),timeframes:['H1','H4'],execution:'manual_only',markets:setups.map(publicSetup)}),text:{format:{type:'json_schema',name:deep?'sera_weltrade_sol_audit':'sera_weltrade_luna_audit',strict:true,schema:auditSchema}}});
+  const instructions=deep?'Tu es Sol, seconde couche de contrôle de Sera Indicator pour les indices synthétiques Deriv. Vérifie profondément chaque setup sans inventer de données. Confirme uniquement le même BUY/SELL technique ou remplace-le par ATTENDRE. Examine H1/H4, structure, liquidité, retest, momentum, ATR, risque de spike et cohérence entrée/SL/TP. La confiance mesure la fiabilité du setup, jamais une garantie de gain.':'Tu es Luna, première couche de contrôle indépendante de Sera Indicator pour les indices synthétiques Deriv. Analyse uniquement les indicateurs fournis. Confirme le même BUY/SELL technique ou remplace-le par ATTENDRE; ne transforme jamais ATTENDRE en signal et n’inverse jamais le sens. Repère les contradictions H1/H4 et le risque de spike. La confiance n’est jamais une garantie de gain.';
+  const response=await callOpenAI({model,reasoning:{effort:deep?'medium':'low'},store:false,instructions,input:JSON.stringify({broker:'Deriv',market_family:'Synthetic Indices',generated_at:new Date().toISOString(),timeframes:['H1','H4'],execution:'manual_only',markets:setups.map(publicSetup)}),text:{format:{type:'json_schema',name:deep?'sera_deriv_sol_audit':'sera_deriv_luna_audit',strict:true,schema:auditSchema}}});
   const parsed=JSON.parse(extractOutputText(response));return {results:parsed.markets||[],response_id:response.id||null,usage:response.usage||null};
 }
 
 function finalize(setup,luna,sol){const audit=sol||luna||{verdict:'ATTENDRE',confidence:0,summary:'Analyse OpenAI absente.',confirmations:[],contradictions:['Validation IA absente'],risk:'Inconnu',needs_expert_review:true};const agreed=setup.technical_verdict!=='ATTENDRE'&&audit.verdict===setup.technical_verdict&&Number(audit.confidence)>=75&&!audit.needs_expert_review;const finalVerdict=agreed?setup.technical_verdict:'ATTENDRE',finalConfidence=agreed?Math.min(99,Math.round(setup.technical_confidence*.45+Number(audit.confidence)*.55)):Math.min(69,Math.round((setup.technical_confidence+Number(audit.confidence||0))/2));return {...publicSetup(setup),levels:finalVerdict==='ATTENDRE'?null:setup.levels,final_verdict:finalVerdict,final_confidence:finalConfidence,ai_verdict:audit.verdict,ai_confidence:Number(audit.confidence)||0,ai_summary:audit.summary,ai_confirmations:audit.confirmations||[],ai_contradictions:audit.contradictions||[],ai_risk:audit.risk,needs_expert_review:Boolean(audit.needs_expert_review),ai_tier:sol?`${DEEP_MODEL} · validation profonde`:`${SCREENING_MODEL} · contrôle initial`};}
 
-async function selfTest(){const candles=Array.from({length:240},(_,i)=>{const base=1000+i*.8,open=base+Math.sin(i/4)*2,close=base+1+Math.sin(i/4)*2,high=Math.max(open,close)+3,low=Math.min(open,close)-3;return{open,high,low,close,epoch:1700000000+i*3600};});const result=inspectCandles(candles);if(!result||!Number.isFinite(result.atr)||!['BUY','SELL'].includes(result.side))throw new Error('Technical engine self-test failed');const setup=technicalSetup({market:'FX Vol',symbol:'TEST.FXVOL'},result,{...result,trendStrong:true});if(!setup.h1||!setup.h4)throw new Error('H1/H4 assembly failed');console.log('Weltrade signal engine self-test passed.');}
+async function selfTest(){const candles=Array.from({length:240},(_,i)=>{const base=1000+i*.8,open=base+Math.sin(i/4)*2,close=base+1+Math.sin(i/4)*2,high=Math.max(open,close)+3,low=Math.min(open,close)-3;return{open,high,low,close,epoch:1700000000+i*3600};});const result=inspectCandles(candles);if(!result||!Number.isFinite(result.atr)||!['BUY','SELL'].includes(result.side))throw new Error('Technical engine self-test failed');const setup=technicalSetup(MARKETS[0],result,{...result,trendStrong:true});if(!setup.h1||!setup.h4)throw new Error('H1/H4 assembly failed');console.log('Deriv signal engine self-test passed.');}
 
 async function main(){
   if(process.argv.includes('--self-test'))return selfTest();
-  const source=await loadWeltradeFeed();
-  if(!source.ready)return writeWaiting(source.status,source.note);
   if(!OPENAI_API_KEY)throw new Error('OPENAI_API_KEY is not configured');
-  const setups=source.feed.markets.map(meta=>{const h1=inspectCandles(meta.h1),h4=inspectCandles(meta.h4);if(!h1||!h4)throw new Error(`Insufficient candles for ${meta.market}`);return technicalSetup({market:meta.market,symbol:meta.symbol},h1,h4);});
+  const candles=await fetchAllCandles();
+  const setups=MARKETS.map(meta=>{const h1=inspectCandles(candles.get(`${meta.symbol}:H1`)),h4=inspectCandles(candles.get(`${meta.symbol}:H4`));if(!h1||!h4)throw new Error(`Insufficient candles for ${meta.market}`);return technicalSetup(meta,h1,h4);});
   const luna=await auditMarkets(SCREENING_MODEL,setups,false),lunaMap=new Map(luna.results.map(row=>[String(row.id),row]));
   const deepCandidates=setups.filter(setup=>setup.technical_verdict!=='ATTENDRE'&&lunaMap.get(setup.symbol)?.verdict===setup.technical_verdict).sort((a,b)=>b.technical_confidence-a.technical_confidence).slice(0,5);
   let sol={results:[],response_id:null,usage:null};if(deepCandidates.length)sol=await auditMarkets(DEEP_MODEL,deepCandidates,true);
   const solMap=new Map(sol.results.map(row=>[String(row.id),row])),markets=setups.map(setup=>finalize(setup,lunaMap.get(setup.symbol),solMap.get(setup.symbol)));
-  const payload={ok:true,status:'ai_analyzed',source_broker:'Weltrade',source:'Weltrade MT5 · SyntX H1/H4',source_updated_at:source.feed.exported_at,updated_at:new Date().toISOString(),model:`${SCREENING_MODEL} + ${DEEP_MODEL}`,screening_model:SCREENING_MODEL,deep_model:DEEP_MODEL,markets_count:markets.length,confirmed_signals:markets.filter(m=>m.final_verdict!=='ATTENDRE').length,markets,openai_response_ids:{screening:luna.response_id,deep:sol.response_id},usage:{screening:luna.usage,deep:sol.usage},safety:'Signaux uniquement. Aucun accès au compte et aucun ordre automatique. BUY/SELL exige un accord technique et OpenAI avec confiance IA >= 75.'};
-  await fs.mkdir(path.dirname(OUTPUT),{recursive:true});await fs.writeFile(OUTPUT,JSON.stringify(payload,null,2));console.log(`Wrote ${markets.length} Weltrade analyses; ${payload.confirmed_signals} confirmed signals.`);
+  const payload={ok:true,status:'ai_analyzed',source_broker:'Deriv',source:'Deriv public WebSocket · H1/H4',updated_at:new Date().toISOString(),model:`${SCREENING_MODEL} + ${DEEP_MODEL}`,screening_model:SCREENING_MODEL,deep_model:DEEP_MODEL,markets_count:markets.length,confirmed_signals:markets.filter(m=>m.final_verdict!=='ATTENDRE').length,markets,openai_response_ids:{screening:luna.response_id,deep:sol.response_id},usage:{screening:luna.usage,deep:sol.usage},safety:'Signaux uniquement. Aucun accès au compte et aucun ordre automatique. BUY/SELL exige un accord technique et OpenAI avec confiance IA >= 75.'};
+  await fs.mkdir(path.dirname(OUTPUT),{recursive:true});await fs.writeFile(OUTPUT,JSON.stringify(payload,null,2));console.log(`Wrote ${markets.length} Deriv analyses; ${payload.confirmed_signals} confirmed signals.`);
 }
 
 main().catch(error=>{console.error(error instanceof Error?error.message:error);process.exit(1);});

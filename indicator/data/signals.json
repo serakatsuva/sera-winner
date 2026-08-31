@@ -1,12 +1,12 @@
 {
   "ok": false,
-  "status": "awaiting_mt5",
-  "source_broker": "Weltrade",
-  "source": "Weltrade MT5 · SyntX",
+  "status": "awaiting_deriv_analysis",
+  "source_broker": "Deriv",
+  "source": "Deriv public WebSocket · H1/H4",
   "updated_at": null,
   "markets_count": 0,
   "confirmed_signals": 0,
   "markets": [],
-  "note": "ATTENDRE — les bougies Weltrade MT5 H1/H4 ne sont pas encore reçues. Aucun cours ni signal n’est inventé.",
+  "note": "ATTENDRE — la prochaine analyse Deriv H1/H4 avec OpenAI est en préparation.",
   "safety": "Signaux uniquement. Aucun accès au compte et aucun ordre automatique."
 }
